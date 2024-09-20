@@ -89,7 +89,7 @@ md5_file(File) ->
   end.
 
 -define(EXCLUDE_PATHS, [".git", "_build", "examples", ".eqc_info"]).
--define(EXCLUDE_FILES, ["^\\.", "~$", "current_counterexample.eqc"]).
+-define(EXCLUDE_FILES, ["^\\.", "~$", "current_counterexample.eqc", "rebar.lock"]).
 
 %% Return the list of files - either for copy, or update check/checksum
 files(RootDir) ->
