@@ -46,12 +46,13 @@ download_(Dir, {path, Path}, _State) ->
   ok = filelib:ensure_dir(Dir),
   {ok, Cwd} = file:get_cwd(),
   Source = filename:join([Cwd, Path]),
-  foreach(fun(X) -> copy(X, Source, Dir) end, [".git", "_build", "examples"], Source),
+  Files = files(Source),
+  rebar_api:info("Download files: ~p" , [Files]),
+  lists:foreach(fun(File) -> copy(File, Source, Dir) end, Files),
   rebar_log:log(debug, "copied source from=~p, to=~p ~n", [Path, Dir]),
-  LastModified = last_modified(Source),
+  LastModified = last_modified(Source, Files),
   {ok, A} = file:read_file_info(Dir),
   file:write_file_info(Path, A#file_info{mtime = LastModified, atime = LastModified}).
-
 
 make_vsn(_Dir) ->
   {error, "Replacing version of type path not supported."}.
@@ -68,81 +69,51 @@ needs_update_(Dir, {path, Path, _}) ->
   rebar_log:log(debug, "compare dir=~p, path=~p last modified=~p, old=~p~n", [Dir, Path, LastModified, Old]),
   (Old < LastModified).
 
-
 last_modified(Source) ->
-  Files = filter_files(dir_files(Source)),
-  last_modified_(Files).
+  Files = files(Source),
+  last_modified(Source, Files).
 
-last_modified_([]) -> calendar:local_time();
-last_modified_(Files) ->
-  lists:foldl(
-    fun(Path, OldT) ->
-        T = filelib:last_modified(Path),
-        if
-          T > OldT -> T;
-          true -> OldT
-        end
-    end,
-    0,
-    Files).
+last_modified(_, []) -> calendar:local_time();
+last_modified(Root, Files) ->
+  lists:max([ filelib:last_modified(filename:join(Root, File)) || File <- Files ]).
 
 to_iso8601({{Y,Mo,D}, {H,Mn,S}}) ->
     FmtStr = "~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0BZ",
     IsoStr = io_lib:format(FmtStr, [Y, Mo, D, H, Mn, S]),
     list_to_binary(IsoStr).
 
-
-dir_files(Path) ->
-  case filelib:is_dir(Path) of
-    true ->
-      filelib:wildcard(filename:join(Path, "**"));
-    false ->
-      [Path]
-  end.
-
-
-filter_files(Files) ->
-    lists:filter(fun is_excluded/1, [filename:absname(F) || F <- Files]).
-
-
-is_excluded(Path) ->
-      KnownExcludes = [
-                     "^.",
-                     "~$"
-                      ],
-
-      lists:foldl(fun(_, true) -> true;
-                     (RE, false) ->
-                      (re:run(Path, RE, [unicode]) =/= nomatch) orelse (filelib:is_regular (Path) /= true)
-                  end, false, KnownExcludes).
-
 copy(File, Source, Target) ->
-    SourceFile = filename:join([Source | File]),
-    TargetFile = filename:join([Target | File]),
+    SourceFile = filename:join(Source, File),
+    TargetFile = filename:join(Target, File),
     ok = filelib:ensure_dir(TargetFile),
     {ok, _} = file:copy(SourceFile, TargetFile).
 
-%%
-%% applies a function to each file for its side-effects
-foreach(Fun, Ignore, Path) ->
-    foreach(Fun, Path, Ignore, []).
+-define(EXCLUDE_PATHS, [".git", "_build", "examples", ".eqc_info"]).
+-define(EXCLUDE_FILES, ["^\\.", "~$", "current_counterexample.eqc"]).
 
-foreach(Fun, Root, Ignore, Path) ->
-    File = filename:join([Root | Path]),
+%% Return the list of files - either for copy, or update check/checksum
+files(RootDir) ->
+    files(RootDir, ?EXCLUDE_PATHS, ?EXCLUDE_FILES, ".").
+
+files(Root, IgnorePaths, IgnoreFiles, Path) ->
+    File = filename:join(Root, Path),
     case filelib:is_dir(File) of
         true  ->
             case file:list_dir(File) of
                 {ok, List} ->
-                    lists:foreach(
-                        fun(X) ->
-                            foreach(Fun, Root, Ignore, X)
-                        end,
-                        [Path ++ [X] || X <- List, not lists:member(X, Ignore)]
-                    );
+                    Dirs = [filename:join(Path, X) || X <- List, not lists:member(X, IgnorePaths)],
+                    lists:flatmap(fun(X) -> files(Root, IgnorePaths, IgnoreFiles, X) end, Dirs);
                 {error, _Reason} ->
-                   ok
+                    []
             end;
         false ->
-            Fun(Path)
+            case is_excluded(filename:basename(File), IgnoreFiles) of
+                true -> [];
+                false -> [Path]
+            end
     end.
 
+is_excluded(Path, Excludes) ->
+    lists:foldl(fun(_, true) -> true;
+                   (RE, false) -> re:run(Path, RE, [unicode]) =/= nomatch
+                end, false, Excludes).
