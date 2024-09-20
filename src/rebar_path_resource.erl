@@ -143,7 +143,7 @@ foreach(Fun, Root, Ignore, Path) ->
                 {error, _Reason} ->
                    ok
             end;
-        false -> 
+        false ->
             Fun(Path)
     end.
 
