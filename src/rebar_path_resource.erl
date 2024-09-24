@@ -2,7 +2,7 @@
 
 -export([init/2,
          lock/2,
-         download/4, download/3,
+         download/4,
          needs_update/2,
          make_vsn/1]).
 
@@ -12,38 +12,12 @@ init(Type, _State) ->
    Resource = rebar_resource_v2:new(Type, ?MODULE, #{}),
    {ok, Resource}.
 
-lock(Dir, Source) when is_tuple(Source) ->
-  lock_(Dir, Source);
-
 lock(AppInfo, _) ->
-  lock_(rebar_app_info:dir(AppInfo), rebar_app_info:source(AppInfo)).
+  Path = extract_path(AppInfo),
+  {path, Path, no_lock}.
 
-lock_(Dir, {path, Path, _}) ->
-  lock_(Dir, {path, Path});
-
-lock_(_Dir, {path, Path}) ->
-  {ok, Cwd} = file:get_cwd(),
-  Source = filename:join([Cwd, Path]),
-  Checksum = dep_checksum(Source),
-  {path, Path, {md5, Checksum}}.
-
-download(TmpDir, {path, Path, _}, State) ->
-  download(TmpDir, {path, Path}, State);
-download(TmpDir, {path, Path}, State) ->
-  case download_(TmpDir, {path, Path}, State) of
-    ok -> {ok, State};
-    Error -> Error
-  end.
-
-download(TmpDir, AppInfo, State, _) ->
-  case rebar_app_info:source(AppInfo) of
-    {path, Path} ->
-      download_(TmpDir, {path, Path}, State);
-    {path, Path, _} ->
-      download_(TmpDir, {path, Path}, State)
-  end.
-
-download_(Dir, {path, Path}, _State) ->
+download(Dir, AppInfo, _RebarState, _ResourceState) ->
+  Path = extract_path(AppInfo),
   ok = filelib:ensure_dir(Dir),
   {ok, Cwd} = file:get_cwd(),
   Source = filename:join([Cwd, Path]),
@@ -54,21 +28,18 @@ download_(Dir, {path, Path}, _State) ->
   rebar_api:debug("copied source from=~p, to=~p ~n", [Path, Dir]),
   ok.
 
+extract_path(AppInfo) ->
+  case rebar_app_info:source(AppInfo) of
+    {path, Path, _} ->
+      Path;
+    {path, Path} ->
+      Path
+  end.
+
 make_vsn(_Dir) ->
   {error, "Replacing version of type `path` not supported."}.
 
-%% Let's only target rebar3 version > 3.7.0 when the resource API was defined.
-needs_update(AppInfo, _CustomState) ->
-  needs_update_(rebar_app_info:dir(AppInfo), rebar_app_info:source(AppInfo)).
-
-needs_update_(_Dir, {path, Path, {md5, OldChecksum}}) ->
-  {ok, Cwd} = file:get_cwd(),
-  Source = filename:join([Cwd, Path]),
-  Checksum = dep_checksum(Source),
-  %% rebar_api:info("Checksum ~p =?= ~200p", [Checksum, OldChecksum]),
-  OldChecksum /= Checksum;
-needs_update_(_Dir, Path) ->
-  rebar_api:debug("Unexpected path format: ~p - expected {path, <Path>, {md5, <Checksum>}}", Path),
+needs_update(_AppInfo, _CustomState) ->
   true.
 
 copy(File, Source, Target) ->
@@ -77,19 +48,8 @@ copy(File, Source, Target) ->
   ok = filelib:ensure_dir(TargetFile),
   {ok, _} = file:copy(SourceFile, TargetFile).
 
-dep_checksum(Source) ->
-  MD5s = [ md5_file(filename:join(Source, File)) || File <- files(Source) ],
-  Checksum = erlang:md5(<< MD5 || <<MD5/binary>> <- MD5s>>),
-  binary:encode_hex(Checksum, lowercase).
-
-md5_file(File) ->
-  case file:read_file(File) of
-    {ok, Bin} -> erlang:md5(Bin);
-    _         -> <<>>
-  end.
-
--define(EXCLUDE_PATHS, [".git", "_build", "examples", ".eqc_info"]).
--define(EXCLUDE_FILES, ["^\\.", "~$", "current_counterexample.eqc", "rebar.lock"]).
+-define(EXCLUDE_PATHS, [".git", "_build", "examples"]).
+-define(EXCLUDE_FILES, ["^\\.", "~$"]).
 
 %% Return the list of files - either for copy, or update check/checksum
 files(RootDir) ->
